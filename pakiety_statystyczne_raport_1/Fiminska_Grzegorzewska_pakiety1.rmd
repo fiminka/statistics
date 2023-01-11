@@ -1,0 +1,362 @@
+---
+title: "Pakiety statystyczne - sprawozdanie 1"
+author: "Wiktoria Fimińska 262283, Julia Grzegorzewska 262314"
+date: "`r Sys.Date()`"
+fontsize: 12pt
+output: 
+  pdf_document:
+        toc: true
+        toc_depth: 3
+        number_sections: true
+        fig_caption: true
+        
+header-includes:
+    - \usepackage{polski}
+    - \usepackage[utf8]{inputenc}
+    - \usepackage{graphicx}
+    -  \usepackage{amsmath}
+    - \usepackage{multirow}
+    - \usepackage{float}
+    - \usepackage{enumitem}
+    - \usepackage{mathtools}
+    - \usepackage{hyperref}
+    - \usepackage{url}
+    - \mathtoolsset{showonlyrefs}
+    - \usepackage{caption}
+    - \usepackage{geometry}
+    
+---
+\newpage
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+```{r echo=FALSE}
+pdf.options(encoding = 'CP1250')
+```
+
+\section{Wprowadzenie}
+
+Niniejsze sprawozdanie jest analizą danych dotyczących wypadków samochodowych w$~$Kanadzie w$~$latach 1999–2014, które zostały pozyskane ze strony \href{https://www.kaggle.com/datasets/tbsteal/canadian-car-accidents-19942014?resource=download&fbclid=IwAR0bY8Cdej8tsyV59JaLioRArUIpIoB9k9VhgfRUo0AqCn611fGhskMnxfA}{kaggle}. 
+
+Celem pracy jest zbadanie wpływu poszczególnych czynników na liczbę zaistniałych wypadków, sprawdzenie, który z$~$nich w największym stopniu przyczynił się do wystąpienia kolizji, a$~$także przeanalizowanie skutku zdrowotnego wypadku w$~$zależności od innych zmiennych. Wszystkie wykresy, obliczenia oraz przekształcenia danych wykonano przy pomocy języka \textit{R}.
+
+\section{Dane}
+```{r, echo = FALSE, message=FALSE}
+library(dplyr)
+library(scales)
+library(ggplot2)
+library(arules)
+library(zoo)
+dane <- read.csv("NCDB_1999_to_2014.csv")
+```
+
+\subsection{Opis zmiennych}
+Pierwotne dane zawierają $22$ kolumny, natomiast istotne dla analizy jest $9$ z$~$nich. Są to:
+\begin{enumerate}[label=(\alph*)]
+    \item \textbf{C\_YEAR}\\
+    Rok kolizji. Wartości od $1999$ do $2014$.
+    \item \textbf{C\_MNTH}\\
+    Miesiąc kolizji. Wartości od $1$ do $12$.
+    \item \textbf{C\_WDAY}\\
+    Dzień kolizji. Wartości od $1$ do $7$ oznaczające kolejne dni tygodnia. 
+    \item \textbf{C\_HOUR}\\
+    Godzina kolizji. Wartości od $00$ do $23$, przy czym np. $1$ oznacza przedział od godziny $1^{00}$ do $1^{59}$.
+    \item \textbf{V\_YEAR}\\
+    Rok produkcji pojazdu.
+    \item \textbf{P\_SEX}\\
+    Płeć osoby biorącej udział w wypadku, przy czym M to mężczyzna, F to kobieta.
+    \item \textbf{P\_AGE}\\ 
+    Wiek osoby biorącej udział w wypadku.
+    \item \textbf{P\_PSN}\\
+    Lokalizacja osoby biorącej udział w wypadku, tj. konkretne siedzenie w samochodzie, bądź status pieszego. 
+    \item \textbf{P\_ISEV}\\ 
+    Stan zdrowotny po kolizji osoby biorącej w niej udział. Wartości $1$-$3$ oznaczają kolejno uraz, brak urazu oraz wypadek śmiertelny.
+\end{enumerate}
+
+\subsection{Przygotowanie danych}
+```{r, echo = FALSE}
+
+#stworzenie kolumny z datą  wmiesiącach i latach
+
+dane$C_DATE <- paste(dane$C_YEAR, "-", dane$C_MNTH)
+dane$C_DATE <- as.yearmon(dane$C_DATE, format = '%Y - %m')
+
+
+#zmiana typu danych z <chr> na <dbl>
+dane$P_PSN <- as.numeric(dane$P_PSN)
+dane$C_HOUR <- as.numeric(dane$C_HOUR)
+dane$C_MNTH <- as.numeric(dane$C_MNTH)
+dane$C_WDAY <- as.numeric(dane$C_WDAY)
+dane$V_TYPE <- as.numeric(dane$V_TYPE)
+dane$V_YEAR <- as.numeric(dane$V_YEAR)
+dane$P_AGE <- as.numeric(dane$P_AGE)
+dane$P_ISEV <- as.numeric(dane$P_ISEV) 
+
+#wybór interesujących nas danych, tylko kierowcy powyżej 15 roku życia
+acc <- subset(dane, dane$P_PSN == 11 & dane$P_AGE >= 15,  select = c("C_YEAR","C_MNTH","C_DATE", "C_WDAY","C_HOUR","V_YEAR" ,"V_TYPE", "P_SEX", "P_AGE", "P_ISEV"))
+
+#czyszczenie danych
+acc <- na.omit(acc)
+acc <- subset(acc, acc$P_SEX == "M" | acc$P_SEX == "F")
+```
+W celu ułatwienia pracy oraz większej przejrzystości analizy podjęto następujące kroki: 
+\begin{itemize}
+\item usunięto nieistotne z$~$punktu widzenia niniejszego sprawozdania kolumny, takie jak np. dokładna konfiguracja kolizji, czy rodzaj skrzyżowania, na którym owa miała miejsce;
+\item dodano kolumnę \textbf{C\_DATE} zawierającą datę wydarzenia podaną w typie danych \textit{yearmon}, która jest sformatowana dzięki bibliotece \textit{zoo};
+\item zmieniono typ danych w$~$pozostałych kolumnach z \textit{character} na \textit{double}, z$~$wyjątkiem kolumny \textbf{P\_SEX}, która nie zawiera danych liczbowych;
+\item wycięto wiersze, dla których wartość \textbf{P\_PSN} jest inna niż liczba $11$, która oznacza kierowcę, aby uniknąć występowania danych z$~$jednego zdarzenia wiele razy (pomijamy pasażerów i$~$uznajemy, że jeden kierowca to jeden wypadek);
+\item usunięto wiersze zawierające wartości brakujące \textit{NA}, a$~$także pominięto te, dla których \textbf{P\_SEX} jest inna niż F - female lub M - male;
+\item ze względu na pewne nieścisłości w$~$danych, usunięto wiersze, w$~$których wiek kierowcy jest mniejszy niż $16$, czyli minimalny wiek, od którego można ubiegać się $~$ prawo jazdy w$~$Kanadzie. 
+\end{itemize}
+W ten sposób z$~$$5 860 405$ obserwacji otrzymano $3 209 732$, czyli $54,77$\%, jednak ze względu na liczność zbioru danych oraz skupienie się na jednej grupie osób nie zaburza to wyników analizy. Po przekształceniach pierwsze $10$ obserwacji przedstawia się następująco (tabela \ref{table1}).
+\begin{table}[h!]
+\centering
+\scalebox{0.8}{
+\begin{tabular}{|c|c|c|c|c|c|c|c|c||} 
+ \hline
+ C\_YEAR & C\_MNTH & C\_WDAY & C\_HOUR  & V\_YEAR & P\_SEX& P\_AGE & P\_ISEV \\ [0.5ex] 
+ \hline\hline
+ 1999 & 1 & 1 & 20  & 1990 & M & 41 & 1 \\ 
+ \hline
+ 1999 & 1 & 1 & 20  & 1987 & M & 19 & 1 \\
+ \hline
+ 1999 & 1 & 1 & 8 & 1986 & M & 46 & 1 \\
+ \hline
+ 1999 & 1 & 1 & 17  & 1984 & M & 28 & 1 \\
+ \hline
+ 1999 & 1 & 1 & 17  & 1991 & M & 21 & 1 \\
+ \hline
+ 1999 & 1 & 1 & 15  & 1997 & M & 61 & 1 \\
+ \hline
+ 1999 & 1 & 1 & 14  & 1993 & F & 34 & 1 \\
+ \hline
+ 1999 & 1 & 1 & 14 & 1997 & F & 34 & 2 \\ 
+ \hline
+ 1999 & 1 & 1 & 1 & 1985 & M & 22 & 2 \\
+ \hline
+ 1999 & 1 & 1 & 11 & 1988 & F & 30 & 2 \\
+ \hline
+\end{tabular}}
+\caption{Przygotowane do analizy dane - pierwsze $10$ obserwacji.}
+\label{table1}
+\end{table}
+Z$~$uwagi na brak znaczącej liczby zmiennych ciągłych skorzystano z$~$metody \textit{group\_by} z$~$biblioteki \textit{dplyr}, aby pogrupować i$~$zliczyć interesujące dane. Zastosowano ją w$~$celu zobrazowania zależności m.in na wykresie typu \textit{heatmap} liczby wypadków od miesięcy. Na wykresie przedstawiającym zależność liczby wypadków od wieku, oprócz wspominanej wcześniej metody, skorzystano z$~$funkcji \textit{discretize} z$~$paczki \textit{arules}, która podzieliła wiek kierowcy na trzy przedziały według liczebności danych, następnie przy pomocy \textit{aggregate} zliczono dla tych przedziałów wartości danych na przestrzeni miesięcy i$~$lat.
+
+\section{Analiza}
+\subsection{Zależność od daty wypadku}
+\subsubsection{Liczba wypadków na przestrzeni lat}
+Pierwszy podjęty krok miał na celu zobrazowanie, jak wyglądała sytuacja z$~$kolizjami w$~$kolejnych latach, od roku $1999$ do roku $2014$. Aby tego dokonać, należalo zliczyć liczbę wierszy w$~$zbiorze danych dla każdego roku. Tak otrzymane wartości przedstawiono na wykresie słupkowym (rysunek \ref{fig:wypadki_lata}). 
+Można zauważyć, że liczba wypadków była podobna w$~$latach $1999-2003$ (średnio 223 722) oraz w$~$latach $2004-2007$ (średnio 207 932). Następnie zaobserwowano ich lekki spadek i$~$liczba kolizji do roku $2014$ utrzymywała się średnio na poziomie 179 913. Może to świadczyć o$~$wzroście świadomości kierowców, ich bezpieczniejszej jeździe lub być skutkiem surowszych kar za łamanie przepisów drogowych. Inną możliwą przyczyną mogła być poprawa stanu nawierzchni dróg. 
+
+```{r,  fig.cap = "\\label{fig:wypadki_lata} Liczba wypadków na przestrzeni lat", echo = FALSE, , message = FALSE, warning = FALSE}
+#wykres słupkowy - liczba wypadków a lata
+ggplot(acc, aes(x=C_YEAR)) +
+  geom_bar(fill="violetred3", alpha=.7) +
+  labs(title="Liczba wypadków na przestrzeni lat", x="rok", y="liczba wypadków") +
+  theme(text = element_text(size=11)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_y_continuous(breaks=seq(0,250000,25000)) +
+  scale_x_continuous(breaks=seq(1999,2014,2))
+```
+
+```{r,  echo = FALSE, , message = FALSE, warning = FALSE}
+count_latami <- acc %>% group_by(acc$C_YEAR) %>%
+  summarise(count=n())
+# mean(count_latami[1:5,])
+# mean(count_latami[6:9,])
+# mean(count_latami[10:16,])
+```
+
+\subsubsection{Liczba wypadków w zależności od miesiąca oraz godziny}
+
+Następnie sprawdzono jak liczba wypadków zmieniała się w$~$poszczególnych godzinach w$~$każdym miesiącu (rysunek \ref{fig:wypadki_miesiace}). W$~$porze nocnej (od godziny $23$ do $6$), biorąc pod uwagę fakt, że analizujemy tutaj okres $16$ lat, jest ona znikoma (poniżej $600$ na każdą godzinę), co zapewne jest spowodowane zmniejszonym natężeniem ruchu. W$~$godzinach od $7$ do $9$, podczas których zazwyczaj ludzie dojeżdżają do pracy lub szkoły, zauważalny jest wzrost liczby kolizji. Najwięcej wypadków w$~$tych godzinach nastąpiło w$~$miesiącach jesienno-zimowych, czyli od września do marca. Kolejne widoczne zwiększenie liczby wypadków można zaobserwować w$~$popołudniowych godzinach szczytu, czyli od $15$ do $17$. Tym razem rozkładają się one w$~$miarę równomiernie w$~$każdym miesiącu, z$~$wyjątkiem kwietnia, w$~$którym to liczba wypadków była najmniejsza spośród wszystkich miesięcy. Co ciekawe, ich liczba jest większa niż w$~$porannych godzinach o$~$zwiększonym natężeniu ruchu. Generalnie można stwierdzić, że największe znaczenie w$~$tym przypadku miał fakt, iż niektóre godziny są godzinami o$~$wzmożonej intensywności przemieszczania się za pomocą samochodu. 
+
+
+```{r, fig.cap = "\\label{fig:wypadki_miesiace} Liczba wypadków w zależności od miesiąca i godziny", echo = FALSE, message = FALSE, warning = FALSE}
+acc_hour <- acc %>% group_by(acc$C_MNTH, acc$C_HOUR) %>%
+  summarise(count=n())
+ggplot(acc_hour, aes(acc_hour$`acc$C_MNTH`,acc_hour$`acc$C_HOUR`,fill=acc_hour$count)) +
+  geom_tile(color="white") +
+  scale_fill_gradient(low="violetred3", high="yellow2") +
+  guides(fill = guide_colourbar(title = NULL, barheight = 20)) +
+  theme(text = element_text(size=11)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_y_continuous(breaks = unique(acc_hour$`acc$C_HOUR`)) +
+  scale_x_continuous(breaks =c(1,4,8,12), labels = c("styczeń", "kwiecień", "sierpień", "grudzień")) +
+  labs(title= paste("Liczba wypadków na godzinę w poszczególnych miesiącach"), x="miesiąc", y="godzina")
+```
+
+\subsubsection{Liczba wypadków w zależności od dnia tygodnia}
+Kolejnym czynnikiem mogącym mieć wpływ na liczbę wypadków jest dzień tygodnia, w$~$którym owy miał miejsce. Ponownie, aby zobrazować sytuację, użyto wykresu słupkowego (rysunek \ref{fig:wypadki_dzien}). Uwzględnione w$~$nim są wszystkie kolizje w$~$latach $1999-2014$.  
+
+Mocno zauważalny spadek w$~$obserwowanych danych nastąpił pod koniec tygodnia, czyli w$~$dni wolne od pracy i$~$szkoły.. Wydaje się to być naturalnym zjawiskiem, biorać pod uwagę fakt, że zazwyczaj jest to dzień spędzania czasu z$~$rodziną w$~$domowym zaciszu. Natomiast znaczny wzrost, bo aż o$~$$56 142$ kolizji w$~$stosunku do dnia poprzedniego, widoczny jest w$~$piątek, co może być spowodowane wzmożonym ruchem drogowym związanym z$~$powrotem ludzi do rodzinnych stron, weekendowym wyjazdem na urlop, bądź także powrotem z$~$wszelakich imprez, po których to stan kierowcy nie był odpowiedni do prowadzenia pojazdu. Wnioskować więc można o$~$zależności pomiędzy dniami tygodnia, a$~$liczbą zaistniałych wypadków. 
+
+```{r, fig.cap = "\\label{fig:wypadki_dzien} Liczba wypadków w zależności od dnia tygodnia", echo = FALSE, message = FALSE, warning = FALSE}
+ggplot(acc, aes(x=C_WDAY)) +
+  geom_bar(fill="violetred3", alpha=.7) +
+  labs(title="Liczba wypadków w poszczególnych dniach tygodnia", x="dzień", y="liczba wypadków") +
+  theme(text = element_text(size=11)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_y_continuous(breaks=seq(0,560000,40000)) +
+  scale_x_discrete(limit = c("1", "2", "3", "4", "5", "6", "7"),labels=c("pon", "wt", "śr", "czw", "pt", "sob", "nd"))
+```
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+count_wday <- acc %>% group_by(acc$C_WDAY) %>%
+  summarise(count=n())
+# count_wday[5,2] - count_wday[4,2]
+```
+
+
+\subsubsection{Liczba wypadków w zależności od dnia tygodnia i godziny}
+Sprawdzono także, jak rozkłada się liczba wypadków na poszczególne godziny z$~$podziałem na konkretne dni tygodnia. Wyniki ponownie przedstawiono na heatmapie (rysunek \ref{fig:wypadki_dzien_godz}). W$~$dni robocze (w$~$Kanadzie także obowiązuje pięciodniowy tydzień pracy) występuje już wcześniej zauważona tendencja wzrostowa liczby wypadków w$~$godzinach szczytu. W$~$dni wolne od pracy, czyli soboty i$~$niedziele, zależność ta, jak można było się domyślać, nie występuje. Liczba wypadków w$~$tych dniach jest nieznacznie podwyższona w$~$godzinach popołudniowych, co może być spowodowane wyjazdami w$~$odwiedziny w$~$rodzinne strony, czy też najzwyczajniej w$~$świecie robieniem zakupów. W$~$piątki, czyli dni, w$~$których wystąpiło najwięcej wypadków, liczba tych zdarzeń w$~$poszczególnych godziny rozkłada się proporcjonalnie w$~$stosunku do pozostałych dni tygodnia. 
+
+```{r, fig.cap = "\\label{fig:wypadki_dzien_godz} Liczba wypadków w zależności od dnia tygodnia i godziny", echo = FALSE, message = FALSE, warning = FALSE}
+acc_hour <- acc %>% group_by(acc$C_WDAY ,acc$C_HOUR) %>%
+  summarise(count=n())
+ggplot(acc_hour, aes(acc_hour$`acc$C_WDAY`,acc_hour$`acc$C_HOUR`,fill=acc_hour$count)) +
+  geom_tile(color="white") +
+  scale_fill_gradient(low="violetred3", high="yellow2") +
+  guides(fill = guide_colourbar(title = NULL, barheight = 20)) +
+  scale_y_continuous(breaks = unique(acc_hour$`acc$C_HOUR`)) +
+  scale_x_discrete(limit = c("1", "2", "3", "4", "5", "6", "7"),labels=c("pon", "wt", "śr", "czw", "pt", "sob", "nd")) +
+  labs(title= paste("Liczba wypadków na godzinę w poszczególnych dniach"), x="dzień tygodnia", y="godzina") +
+  theme(text = element_text(size=11)) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+\subsection{Wiek kierowcy biorącego udział w wypadku na przestrzeni lat}
+
+Kolejnym podjętym krokiem było zbadanie wpływu wieku kierowcy pojazdu biorącego udział w$~$wypadku na liczbę tych zdarzeń w$~$latach $1999-2014$. 
+Aby spojrzeć z$~$innej strony na analizowane dane, podzielono je na trzy grupy wiekowe a$~$mianowicie [$15$, $41$), [$41$,$68$) oraz [$68$, $99$]. Otrzymane wyniki przedstawiono na wykresie liniowo-punktowym (rysunek \ref{fig:wypadki_wiek}). Największa liczba wypadków dla najmłodszej grupy wiekowej oraz najmniejsza dla najstarszej wynika przypuszczalnie z$~$różnic w$~$samej liczbie kierowców z$~$poszczególnych grup wiekowych (najwięcej młodych kierowców, najmniej starszych). Zauważalna jest tu pewna sezonowość, a$~$mianowicie co roku w$~$okolicach kwietnia następował gwałtowny spadek liczby kolizji w$~$każdej grupie wiekowej, co jest ciekawą zależnością. Patrząc kolejno na każdą z$~$grup, widać, że w$~$przedziale wiekowym [$15$, $41$) suma wypadków w$~$kolejnych latach maleje. Dla grupy [$68$, $99$] liczba wypadków utrzymuje się w$~$miarę na równym poziomie, za wyjątkiem wspomnianego wcześniej spadku w$~$kwietniu. W$~$środkowym przedziale wiekowym nie widać szczególnych zależności w$~$liczbie wypadków w$~$kolejnych latach. 
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+acc_driver <- acc %>% group_by(acc$C_DATE, acc$P_AGE) %>%
+  summarise(count=n())
+acc_driver$P_DEC <- discretize(x=acc_driver$`acc$P_AGE`, method = "frequency")
+acc_driver <- aggregate(count~ `acc$C_DATE`+ P_DEC, acc_driver, FUN=sum)
+```
+
+
+```{r, fig.cap = "\\label{fig:wypadki_wiek} Wypadki a wiek kierowcy na przestrzeni lat", echo = FALSE, message = FALSE, warning = FALSE}
+ggplot(acc_driver, aes(x = `acc$C_DATE`, y = count, color = P_DEC)) +
+  geom_line() +
+  geom_point() +
+  scale_color_manual(values = c("violetred2", "blue", "red", "black")) +
+  labs(title="Wypadki a wiek kierowcy na przestrzeni lat", x="data", y="liczba wypadków", color="Przedział wiekowy") +
+  theme(text = element_text(size=11)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_y_continuous(breaks = seq(0, 15000, 3000)) +
+  theme(axis.text.x = element_text(angle=90, vjust= 0.5, hjust = 0.7)) 
+  # scale_x_discrete(guide = guide_axis(n.dodge = 2))
+```
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+med <- median(acc$P_AGE)
+srednia <- mean(acc$P_AGE)
+```
+
+
+\subsection{Wypadki a płeć kierowcy}
+
+Przeanalizowano także liczbę wypadków spowodowanych przez mężczyzn i$~$kobiety na przestrzeni lat (rysunek \ref{fig:wypadki_plec}). Sumarycznie mężczyźni spowodowali $1 954 792$ wypadków, czyli aż o$~$$699 852$ więcej od kobiet, co może sugerować, że kobiety jeżdżą bezpieczniej. Jednak ze względu na brak danych dotyczących stosunku ogólnej liczby kierowców płci męskiej do żeńskiej, nie da się jednoznacznie określić przyczyny takiej sytuacji. Można natomiast zauważyć, że w$~$przypadku płci męskiej bardziej zauważalny jest spadek liczby wypadków w$~$kolejnych latach, co może świadczyć o rosnącej świadomości na temat bezpiecznej jazdy w$~$tej grupie osób. 
+
+```{r, fig.cap = "\\label{fig:wypadki_plec} Wypadki a płeć kierowcy na przestrzeni lat", echo = FALSE, message = FALSE, warning = FALSE}
+ggplot(acc, aes(x=C_YEAR, fill = P_SEX)) + 
+  geom_bar(position="dodge", alpha=0.7) +
+  scale_fill_manual(values = c("violetred2", "yellow2")) +
+  labs(title="Wypadki a płeć kierowcy na przestrzeni lat", x="rok", y="liczba wypadków", fill="Płeć") +
+  theme(text = element_text(size=11)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_y_continuous(breaks=seq(0,150000,25000)) +
+  scale_x_continuous(breaks=seq(1999,2014,2))
+```
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+count_sex <- acc %>% group_by(acc$P_SEX) %>%
+  summarise(count=n())
+# count_sex[2,2] - count_sex[1,2]
+# count_sex
+```
+
+
+\subsection{Skutek zdrowotny kierowcy po wypadku}
+
+Jeśli chodzi o$~$skutek zdrowotny kierowcy po wypadku, to najwięcej z$~$zaistniałych zdarzeń zakończyło się urazem. Trochę mniej,  bo o$~$$9.3$ punktów procentowych wypadków nie spowodowało żadnego uszczerbku na zdrowiu, a$~$$0.7$ procent z$~$nich niestety było śmiertelnych (rysunek \ref{fig:wypadki_skutek}). 
+
+
+```{r, fig.cap = "\\label{fig:wypadki_skutek} Skutek zdrowotny kierowcy po wypadku", echo = FALSE, message = FALSE, warning = FALSE}
+
+count_isev <- acc %>% group_by(acc$P_ISEV) %>%
+  summarise(count=n())
+suma <- sum(count_isev$count)
+
+count_isev$procent <- percent(count_isev$count/suma)
+count_isev$`acc$P_ISEV` <- c("bez urazu 45%", "uraz 54.3%", "śmierć 0.7%") 
+# count_isev
+
+ggplot(count_isev, aes(x="", y = count, fill = `acc$P_ISEV`)) + 
+  geom_col(width=2, alpha=.7) +
+  labs(title="Skutek zdrowotny kierowcy", x=NULL, y= NULL, fill=NULL) +
+  coord_polar("y", start=0) +
+  theme(text = element_text(size=11)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_manual(values=c("violetred3", "black", "yellow2")) +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank(), panel.border = element_blank(), panel.grid=element_blank(), axis.ticks = element_blank()) +
+  theme(axis.text.x=element_blank())
+
+```
+
+\subsubsection{Zależność od wieku auta}
+
+Zbadano wpływ wieku auta na stan zdrowotny kierowcy po wypadku (rysunek \ref{fig:wypadki_wiekauta}). Najpierw, aby uzyskać wiek auta, od kolumny \textbf{C\_YEAR} odjęto kolumnę \textbf{V\_YEAR}. Na każdym wykresie pudełkowym zauważyć można wiele wartości odstających, co wynika z$~$faktu, że auta wieloletnie nie są często spotykane na drogach, a$~$raczej są traktowane, jako zabytki i$~$eksponaty. Mediana wieku auta biorącego udział w$~$wypadku urazowym oraz bezurazowym wynosi około $8$, natomiast dla wypadku śmiertelnego około $9$. Widoczne jest, że wypadki śmiertelne powodowane były przez nieco starsze auta niż pozostałe. 
+
+```{r, fig.cap = "\\label{fig:wypadki_wiekauta} Wiek auta a skutek zdrowotny kierowcy po wypadku", echo = FALSE, message = FALSE, warning = FALSE}
+acc$V_AGE <- acc$C_YEAR-acc$V_YEAR + 1
+ggplot(acc, aes(x = acc$P_ISEV, y = acc$V_AGE, group=acc$P_ISEV)) +
+  geom_boxplot(color="violetred3", fill="violetred3", alpha=.2) +
+  labs(title="Średni wiek auta a skutek zdrowotny kierowcy",x="skutek zdrowotny" ,y = "wiek auta") +
+  scale_x_discrete(limit = c("1", "2", "3"),labels=c("bez urazu", "uraz", "śmierć")) +
+  scale_y_continuous(breaks=seq(0,110,5)) +
+  theme(text = element_text(size=11)) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+\subsubsection{Zależność od wieku kierowcy}
+Przeanalizowano również jaki wpływ na stan zdrowotny kierowcy po wypadku miał jego wiek. Dane zobrazowano za pomocą wykresu wiolinowego (rysunek \ref{fig:wypadki_wiek_skutek}), który jest połączeniem wykresu pudełkowego z$~$estymatorem jądrowym gęstośći KDE. Dla wypadków bezurazowych mediana wieku kierowcy to około $40$ lat, dla urazowych $37$, a$~$dla śmiertelnych nieco ponad $40$. Dzięki specyfice wykresu można jednak zauważyć, że najbardziej liczną grupą osób powodujących każdy z rozważanych rodzajów wypadków są młodzi kierowcy, czyli tacy przed $20$ rokiem życia. Na pierwszych dwóch wykresach można zauważyć większe podobieństwo kształtu linii KDE, jednak w$~$wypadkach kończących się urazami zauważyć można szersze wybrzuszenie dla młodych kierowców. Ciekawe spostrzeżenia zauważa się także przy ostatnim z$~$wykresów. Mianowicie, ewidentnie największą grupą osób powodującą wypadki śmiertelne są młodzi kierowcy. Widoczny jest w$~$tym przypadku również stosunkowy wzrost fatalnych skutków wypadku dla osób starszych, miedzy $70$$~$a$~$$80$ rokiem życia.
+
+```{r, fig.cap = "\\label{fig:wypadki_wiek_skutek} Wiek kierowcy a skutek zdrowotny", echo = FALSE, message = FALSE, warning = FALSE}
+ggplot(acc, aes(x = acc$P_ISEV, y = acc$P_AGE, group=acc$P_ISEV)) +
+  geom_violin(width=0.5,color="violetred3", fill="violetred3", alpha=.2) +
+  geom_boxplot(width=0.1, color="violetred3", alpha=0.4) +
+  labs(title="Średni wiek kierowcy a skutek zdrowotny",x="skutek zdrowotny" ,y = "wiek") +
+  scale_x_discrete(limit = c("1", "2", "3"),labels=c("bez urazu", "uraz", "śmierć")) +
+  scale_y_continuous(breaks=seq(0,100,10)) +
+  theme(text = element_text(size=11)) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+\subsubsection{Zależność od płci kierowcy}
+Na koniec sprawdzono zależność od płci kierowcy (rysunek \ref{fig:skutek_plec}). Zdecydowana większość wypadków spowodowanych przez kobiety zakończyła się dla nich uszczerbkiem na zdrowiu. W$~$przypadku mężczyzn liczba wypadków urazowych i$~$bezurazowych jest bardzo podobna. Jeśli chodzi o$~$wypadki śmiertnelne to procentowo mężczyźni powodują je częściej. Zależności te mogą prowadzić do wniosku, że w$~$sytuacjach kryzysowych na drodze mężczyźni posiadają lepsze umiejętności zachowania się w$~$sposób odpowiedni do zaistniałej sytuacji. Z$~$drugiej strony natomiast mniejsza śmiertelność u$~$kobiet może być spowodowana faktem, iż jeżdżą one wolniej i$~$bezpieczniej, przez co wypadki nie mają tak drastycznych skutków. 
+
+```{r, fig.cap = "\\label{fig:skutek_plec} Stan zdrowotny kierowcy w zależności od jego płci", echo=FALSE, message = FALSE, warning = FALSE}
+#procentowe skutki wypadku
+ggplot(acc, aes(x= P_ISEV,  group=P_SEX), stat="identity") + 
+  geom_bar(aes(y = ..prop.., fill = factor(..group..)), stat="count", alpha=.7) +
+  geom_text(aes( label = scales::percent(..prop..),
+                 y= ..prop.. ), stat= "count", vjust = -.5) +
+  labs(title="Stan zdrowotny kierowcy w zależności od płci",x=NULL ,y = "procent", fill="płeć") +
+  theme(text = element_text(size=15)) +
+  facet_wrap(~P_SEX) +
+  scale_fill_manual(values = c("violetred3", "yellow2"), labels=c("F", "M")) +
+  scale_x_discrete(limit = c("1", "2", "3"),labels=c("bez urazu", "uraz", "śmierć")) +
+  scale_y_continuous(labels = scales::percent) +
+  theme(text = element_text(size=11)) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+\section{Podsumowanie}
+Podczas dokonanej analizy zauważono wiele ciekawych obserwacji dotyczących wypadków samochodowych w$~$Kanadzie oraz dokonano ich interpretacji. Zauważono, że liczba wypadków na przestrzeni lat stopniowo malała, co mogło świadczyć o$~$rosnącej świadomości kierowców na temat bezpiecznej jazdy. Nie jest zaskakujące, że zdarzenia te występowały częściej w$~$środku tygodnia niż w$~$dni wolne od pracy. Ciekawą zależnością jest znaczny spadek liczby wypadków w$~$kwietniu. Widoczne jest również, że najwięcej wypadków powodują młodzi kierowcy, jednak jest to zapewne spowodowane ich największą ilością na drodze w$~$stosunku do innych grup wiekowych. Natomiast zdecydowanie największy wpływ na liczbę wypadków miała pora dnia, co wynika ze wzmożonego natężenia ruchu drogowego w$~$pewnych godzinach. Jeśli chodzi o$~$stan zdrowotny kierowcy po wypadku, to wiek auta minimalnie przyczynił się do większej śmiertelności zaistniałych wypadków. Więcej urazowych wypadków powodują najmłodsi oraz najstarsi kierowcy. U$~$tych drugich widoczna jest także zwiększona ilość wypadków śmiertelnych, co może skłonić do przemyśleń na temat słuszności prowadzenia pojazdów przez osoby starsze, ze względu na ich zazwyczaj gorszy stan zdrowotny. Zależność od płci kierowcy jest również interesująca ze względu na fakt, że wypadki spowodowane przez kobiety o$~$wiele częśćiej kończą sie urazem, natomiast mężczyźni procentowo powodują więcej wypadków śmiertelnych niż płeć przeciwna.
