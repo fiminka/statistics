@@ -5,7 +5,7 @@
 This repository consists of three reports incuding projects from courses "Statystyka stosowana" (4th semester) and "Pakiety statystyczne" (5th semester) at Wrocław University of Science and Technology.
   
 ### Raport 2
-Statistic analisys of [NBA players' height](https://www.kaggle.com/code/justinas/nba-height-and-weight-analysis/data) through years data set. Data visualisation and counting statistics, like mean, quartiles, variance, standard deviation, variation coefficient, interquartile range, skewness and curtosis.
+Statistic analysis of [NBA players' height](https://www.kaggle.com/code/justinas/nba-height-and-weight-analysis/data) through years data set. Data visualisation and counting statistics, like mean, quartiles, variance, standard deviation, variation coefficient, interquartile range, skewness and curtosis.
  
 
 ### Raport 1
